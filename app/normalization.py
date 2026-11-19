@@ -18,6 +18,8 @@ from __future__ import annotations
 ACGT = frozenset("ACGT")
 VALID_GTS = ("0/1", "1/1")
 MAX_NAME_LEN = 128
+# 标准表头：空白对照「零检出」文件只允许包含这一行
+STANDARD_HEADER = ("POS", "REF", "ALT", "GT")
 
 
 class ValidationError(Exception):
@@ -62,14 +64,43 @@ def parse_tsv(raw: bytes | str) -> list[dict]:
     可选首行表头（首列不是整数即视为表头）。空行跳过。
     每行必须恰好 4 列：POS(1-based)、REF、ALT、GT。
     """
+    rows, _headers = _parse_tsv(raw)
+    if not rows:
+        raise ValidationError("TSV 中没有任何变异记录。")
+    return rows
+
+
+def parse_control_tsv(raw: bytes | str) -> list[dict]:
+    """解析空白对照 TSV，返回原始行列表（零检出时为空列表）。
+
+    与样本 TSV 同一套解析规则，唯一区别是允许「零检出」：
+    文件只含标准表头（POS/REF/ALT/GT）时返回空列表，代表一次有效的
+    零检出对照。空文件或仅含非标表头的文件不代表有效零检出，直接拒绝；
+    含数据行时由调用方继续做 REF 核对、归一化与重复校验。
+    """
+    rows, headers = _parse_tsv(raw)
+    if rows:
+        return rows
+    if len(headers) == 1 and tuple(headers[0]) == STANDARD_HEADER:
+        return []
+    raise ValidationError(
+        "空白对照的零检出文件必须只含标准表头（POS\\tREF\\tALT\\tGT）；"
+        "空文件或非标表头不代表有效的零检出。"
+    )
+
+
+def _parse_tsv(raw: bytes | str) -> tuple[list[dict], list[list[str]]]:
+    """解析 TSV，返回 (数据行, 表头行列表)；不要求至少一条数据行。"""
     text = _decode(raw)
     rows: list[dict] = []
+    headers: list[list[str]] = []
     for lineno, line in enumerate(text.splitlines(), start=1):
         if not line.strip():
             continue
         fields = [f.strip() for f in line.split("\t")]
         if not rows and fields and not _is_int(fields[0]):
-            # 首行且首列不是数字 -> 视为表头
+            # 数据行之前、首列不是整数的行 -> 视为表头
+            headers.append(fields)
             continue
         if len(fields) != 4:
             raise ValidationError(f"第 {lineno} 行：应为 4 列（POS\\tREF\\tALT\\tGT），实际 {len(fields)} 列。")
@@ -79,9 +110,7 @@ def parse_tsv(raw: bytes | str) -> list[dict]:
         rows.append(
             {"lineno": lineno, "pos": int(pos_s), "ref": ref, "alt": alt, "gt": gt}
         )
-    if not rows:
-        raise ValidationError("TSV 中没有任何变异记录。")
-    return rows
+    return rows, headers
 
 
 def validate_and_normalize(rows: list[dict], ref_seq: str) -> list[dict]:

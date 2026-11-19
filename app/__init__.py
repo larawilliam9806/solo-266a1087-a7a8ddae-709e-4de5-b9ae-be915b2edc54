@@ -58,21 +58,55 @@ def create_app() -> Flask:
     @app.post("/samples")
     def upload_sample():
         name = request.form.get("name", "")
+        batch = request.form.get("batch", "")
         file = request.files.get("sample")
         if file is None or not file.filename:
             flash("请选择样本 TSV 文件。", "error")
             return redirect(url_for("index"))
         try:
-            result = services.upload_sample(name, file.read())
+            result = services.upload_sample(name, file.read(), batch=batch)
         except ValidationError as exc:
             flash(f"样本上传失败，当前结果未改变：{exc}", "error")
             return redirect(url_for("index"))
         action = "替换旧版本" if result["replaced"] else "新建"
+        batch_note = f"，批次「{result['batch']}」" if result["batch"] else "（未分批）"
         flash(
-            f"样本「{result['sample']}」{action}成功，"
+            f"样本「{result['sample']}」{action}成功{batch_note}，"
             f"归一化后 {result['count']} 条变异。",
             "success",
         )
+        return redirect(url_for("index"))
+
+    @app.post("/controls")
+    def upload_control():
+        batch = request.form.get("batch", "")
+        expected = request.form.get("reference_id", "")
+        file = request.files.get("control")
+        if file is None or not file.filename:
+            flash("请选择空白对照 TSV 文件。", "error")
+            return redirect(url_for("index"))
+        try:
+            expected_ref_id = int(expected)
+        except (TypeError, ValueError):
+            flash("对照提交缺少页面参考版本，请刷新页面后重试；已生效对照不变。", "error")
+            return redirect(url_for("index"))
+        try:
+            result = services.upload_control(batch, file.read(), expected_ref_id)
+        except ValidationError as exc:
+            flash(f"对照提交被拒绝，已生效对照不变：{exc}", "error")
+            return redirect(url_for("index"))
+        action = "替换旧对照" if result["replaced"] else "新建"
+        if result["count"] == 0:
+            flash(
+                f"批次「{result['batch']}」空白对照{action}生效：零检出（仅标准表头）。",
+                "success",
+            )
+        else:
+            flash(
+                f"批次「{result['batch']}」空白对照{action}生效："
+                f"归一化后 {result['count']} 条变异。",
+                "success",
+            )
         return redirect(url_for("index"))
 
     @app.post("/samples/<int:sample_id>/delete")

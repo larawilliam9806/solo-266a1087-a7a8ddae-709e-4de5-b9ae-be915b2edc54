@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS reference_sequences (
 CREATE TABLE IF NOT EXISTS samples (
     id                INTEGER PRIMARY KEY,
     name              TEXT NOT NULL UNIQUE,
+    batch             TEXT,
     reference_id      INTEGER REFERENCES reference_sequences(id),
     status            TEXT NOT NULL CHECK (status IN ('VALID', 'NEEDS_REUPLOAD')),
     error             TEXT,
@@ -95,9 +96,35 @@ CREATE TABLE IF NOT EXISTS sample_variants (
     orig_alt      TEXT NOT NULL
 );
 
+-- 空白对照：按 (批次, 参考版本) 唯一，每批只保留本版参考下最后一次上传成功的一份
+CREATE TABLE IF NOT EXISTS controls (
+    id            INTEGER PRIMARY KEY,
+    batch         TEXT NOT NULL,
+    reference_id  INTEGER NOT NULL REFERENCES reference_sequences(id),
+    raw_tsv       TEXT NOT NULL,
+    uploaded_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (batch, reference_id)
+);
+
+CREATE TABLE IF NOT EXISTS control_variants (
+    id            INTEGER PRIMARY KEY,
+    control_id    INTEGER NOT NULL REFERENCES controls(id) ON DELETE CASCADE,
+    pos           INTEGER NOT NULL,
+    ref           TEXT NOT NULL,
+    alt           TEXT NOT NULL,
+    gt            TEXT NOT NULL,
+    kind          TEXT NOT NULL,
+    orig_pos      INTEGER NOT NULL,
+    orig_ref      TEXT NOT NULL,
+    orig_alt      TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_variant_canonical
     ON sample_variants(pos, ref, alt);
 CREATE INDEX IF NOT EXISTS idx_variant_sample ON sample_variants(sample_id);
+CREATE INDEX IF NOT EXISTS idx_controls_batch_ref ON controls(batch, reference_id);
+CREATE INDEX IF NOT EXISTS idx_control_variant_canonical
+    ON control_variants(control_id, pos, ref, alt);
 """
 
 
@@ -105,9 +132,17 @@ def init_db(app: Flask) -> None:
     conn = sqlite3.connect(app.config["DATABASE"])
     try:
         conn.executescript(SCHEMA)
+        _migrate(conn)
         conn.commit()
     finally:
         conn.close()
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """对上线前已存在的库做就地迁移：旧样本一律视为未分批（batch=NULL）。"""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(samples)")}
+    if "batch" not in cols:
+        conn.execute("ALTER TABLE samples ADD COLUMN batch TEXT")
 
 
 def init_app(app: Flask) -> None:

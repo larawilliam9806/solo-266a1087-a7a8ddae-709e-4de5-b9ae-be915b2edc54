@@ -12,7 +12,7 @@
     <p class="seq" title="参考序列预览">
       {{ reference.sequence[:120] }}{% if reference.length > 120 %}…（仅显示前 120 bp）{% endif %}
     </p>
-    <p class="hint">更换参考会立即按新序列重新校验全部样本：REF 不符或归一化后重复的样本将标记为「待重传」并从汇总剔除。</p>
+    <p class="hint">更换参考会立即按新序列重新校验全部样本：REF 不符或归一化后重复的样本将标记为「待重传」并从汇总剔除；各批次的空白对照也需按新参考重新提交。</p>
   {% else %}
     <p class="empty">尚未上传参考序列，请先上传一条仅含 ACGT 的参考序列（支持纯文本或单记录 FASTA）。</p>
   {% endif %}
@@ -24,9 +24,10 @@
 
 <section class="card">
   <h2>上传样本 TSV</h2>
-  <p class="hint">列：<code>POS（从 1 计数）&nbsp;REF&nbsp;ALT&nbsp;GT</code>，Tab 分隔，可带表头。同名样本重传会替换旧版。</p>
+  <p class="hint">列：<code>POS（从 1 计数）&nbsp;REF&nbsp;ALT&nbsp;GT</code>，Tab 分隔，可带表头。实验批次选填；同名样本重传会替换旧版，批次以本次填写为准（未填即为未分批）。</p>
   <form method="post" action="{{ url_for('upload_sample') }}" enctype="multipart/form-data" class="upload">
     <input type="text" name="name" placeholder="样本名称，如 S1" maxlength="128" required>
+    <input type="text" name="batch" placeholder="实验批次（选填），如 B2026-01" maxlength="128">
     <input type="file" name="sample" accept=".tsv,.txt,text/tab-separated-values" required>
     <button type="submit" class="primary">上传样本</button>
   </form>
@@ -34,18 +35,52 @@
 
 {% if reference %}
 <section class="card">
+  <h2>空白对照（按批次 · 当前参考 #{{ reference.id }}）</h2>
+  <p class="hint">
+    空白对照检出的变异只影响同批样本的质控判定。仅含标准表头
+    <code>POS&nbsp;REF&nbsp;ALT&nbsp;GT</code> 的文件代表有效的零检出；
+    含数据行时与样本一样做 REF 核对、归一化与重复校验。
+    每批只保留本版参考下最后一次上传成功的对照；页面所示参考被换下或文件校验失败时，
+    本次提交将被拒绝，已生效对照保持不变。
+  </p>
+  <form method="post" action="{{ url_for('upload_control') }}" enctype="multipart/form-data" class="upload">
+    <input type="text" name="batch" placeholder="实验批次，如 B2026-01" maxlength="128" required>
+    <input type="file" name="control" accept=".tsv,.txt,text/tab-separated-values" required>
+    <input type="hidden" name="reference_id" value="{{ reference.id }}">
+    <button type="submit" class="primary">上传空白对照</button>
+  </form>
+  {% if controls %}
+  <table>
+    <thead><tr><th>批次</th><th>对照变异数</th><th>上传时间</th></tr></thead>
+    <tbody>
+    {% for c in controls %}
+      <tr>
+        <td>{{ c.batch }}</td>
+        <td>{{ c.variant_count }}</td>
+        <td>{{ c.uploaded_at }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="empty">当前参考下还没有生效的空白对照；有批次的样本将计入「缺批次或缺本版对照」。</p>
+  {% endif %}
+</section>
+
+<section class="card">
   <h2>样本列表（当前参考 #{{ reference.id }}）</h2>
   <p class="hint">
-    有效样本 {{ stats.valid }} 个 · 待重传 {{ stats.needs_reupload }} 个
+    有效样本 {{ stats.valid }} 个 · 待重传 {{ stats.needs_reupload }} 个 · 空白对照 {{ stats.controls }} 个
     {% if stats.stale %}· <strong>{{ stats.stale }} 个样本属于历史参考，不参与当前汇总</strong>{% endif %}
   </p>
   {% if samples %}
   <table>
-    <thead><tr><th>样本</th><th>状态</th><th>变异数</th><th>上传时间</th><th>说明</th><th></th></tr></thead>
+    <thead><tr><th>样本</th><th>批次</th><th>状态</th><th>变异数</th><th>上传时间</th><th>说明</th><th></th></tr></thead>
     <tbody>
     {% for s in samples %}
       <tr class="{{ 'row-warn' if s.status == 'NEEDS_REUPLOAD' or s.reference_id != reference.id }}">
         <td>{{ s.name }}</td>
+        <td>{{ s.batch or '—' }}</td>
         <td>
           {% if s.reference_id != reference.id %}
             <span class="tag tag-stale">历史参考 #{{ s.reference_id }}</span>
@@ -75,10 +110,10 @@
 
 <section class="card">
   <h2>规范变异汇总</h2>
-  <p class="hint">按参考左对齐去冗余后的规范坐标；仅统计当前参考下有效样本，点击变异查看各样本基因型与原始位点。</p>
+  <p class="hint">按参考左对齐去冗余后的规范坐标；仅统计当前参考下有效样本。检出数按同批空白对照拆分为「对照未检出 / 对照也检出 / 缺批次或缺本版对照」，点击变异查看逐样本质控判定。</p>
   {% if variants %}
   <table>
-    <thead><tr><th>规范位点</th><th>REF</th><th>ALT</th><th>类型</th><th>检出样本数</th><th></th></tr></thead>
+    <thead><tr><th>规范位点</th><th>REF</th><th>ALT</th><th>类型</th><th>检出总数</th><th>对照未检出</th><th>对照也检出</th><th>缺批次或缺本版对照</th><th></th></tr></thead>
     <tbody>
     {% for v in variants %}
       <tr>
@@ -87,6 +122,9 @@
         <td class="mono">{{ v.alt }}</td>
         <td><span class="tag tag-kind">{{ v.kind }}</span></td>
         <td><strong>{{ v.n_samples }}</strong></td>
+        <td class="num-ok">{{ v.n_control_clean }}</td>
+        <td class="{{ 'num-bad' if v.n_control_hit else '' }}">{{ v.n_control_hit }}</td>
+        <td>{{ v.n_no_control }}</td>
         <td><a class="detail-link"
                href="{{ url_for('variant_detail', pos=v.pos, alleles=v.ref ~ '>' ~ v.alt) }}">详情 →</a></td>
       </tr>

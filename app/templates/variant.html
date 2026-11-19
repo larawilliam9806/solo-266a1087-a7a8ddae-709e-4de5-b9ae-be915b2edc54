@@ -4,19 +4,47 @@
 <section class="card">
   <p><a href="{{ url_for('index') }}">← 返回汇总</a></p>
   <h2>规范变异 {{ variant.pos }} : {{ variant.ref }} → {{ variant.alt }}</h2>
-  <p class="hint">共 {{ variant.rows|length }} 个样本检出；下表保留每份 TSV 中书写的原始位点与等位基因。</p>
+  <p class="hint">
+    共 {{ variant.rows|length }} 个有效样本检出；下表保留每份 TSV 中书写的原始位点与等位基因，
+    并给出逐样本质控判定：
+    <span class="tag tag-ok">通过</span>＝同批空白对照未检出；
+    <span class="tag tag-bad">对照也检出</span>＝同批空白对照命中该变异（附对照原始位点），需复核；
+    <span class="tag tag-stale">缺对照</span>＝样本缺批次或缺本版对照，无法判定。
+  </p>
   <table>
     <thead>
-      <tr><th>样本</th><th>基因型 (GT)</th><th>原始 POS</th><th>原始 REF</th><th>原始 ALT</th></tr>
+      <tr>
+        <th>样本</th><th>批次</th><th>基因型 (GT)</th>
+        <th>原始 POS</th><th>原始 REF</th><th>原始 ALT</th>
+        <th>质控判定</th>
+        <th>对照原始 POS</th><th>对照原始 REF</th><th>对照原始 ALT</th>
+      </tr>
     </thead>
     <tbody>
     {% for r in variant.rows %}
       <tr>
         <td>{{ r.sample }}</td>
+        <td>{{ r.batch or '—' }}</td>
         <td class="mono">{{ r.gt }}</td>
         <td>{{ r.orig_pos }}</td>
         <td class="mono">{{ r.orig_ref }}</td>
         <td class="mono">{{ r.orig_alt }}</td>
+        <td>
+          {% if r.qc == 'PASS' %}
+            <span class="tag tag-ok">通过</span>
+          {% elif r.qc == 'CONTROL_HIT' %}
+            <span class="tag tag-bad">对照也检出</span>
+          {% else %}
+            <span class="tag tag-stale">缺对照</span>
+          {% endif %}
+        </td>
+        {% if r.qc == 'CONTROL_HIT' %}
+          <td>{{ r.ctl_pos }}</td>
+          <td class="mono">{{ r.ctl_ref }}</td>
+          <td class="mono">{{ r.ctl_alt }}</td>
+        {% else %}
+          <td>—</td><td>—</td><td>—</td>
+        {% endif %}
       </tr>
     {% endfor %}
     </tbody>
